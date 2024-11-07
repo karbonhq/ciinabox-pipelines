@@ -18,7 +18,6 @@ executeChangeSet(
 import com.base2.ciinabox.aws.AwsClientBuilder
 import com.base2.ciinabox.aws.CloudformationStack
 import com.base2.ciinabox.aws.CloudformationStackEvents
-
 import com.amazonaws.services.cloudformation.model.ExecuteChangeSetRequest
 import com.amazonaws.services.cloudformation.model.DescribeStacksRequest
 import com.amazonaws.services.cloudformation.waiters.AmazonCloudFormationWaiters
@@ -26,6 +25,8 @@ import com.amazonaws.waiters.WaiterParameters
 import com.amazonaws.waiters.WaiterUnrecoverableException
 import com.amazonaws.waiters.NoOpWaiterHandler
 import java.util.concurrent.Future
+import com.amazonaws.auth.AWSStaticCredentialsProvider
+import com.amazonaws.services.cloudformation.AmazonCloudFormationClientBuilder
 
 def call(body) {
   def config = body
@@ -42,17 +43,18 @@ def call(body) {
 }
 
 def apply(config, stackName, stackNameUpper) {
-  
+
   def clientBuilder = new AwsClientBuilder([
     region: config.region,
     awsAccountId: config.get('awsAccountId'),
     role: config.get('role'),
     maxErrorRetry: config.get('maxErrorRetry', 3),
-    env: env])
+    env: env,
+    duration: config.get('duration', 3600)])
     
   def cfclient = clientBuilder.cloudformation()
-
   def cfstack = new CloudformationStack(clientBuilder, stackName)
+  
   def changeSetType = cfstack.getChangeSetType()
   cfStack = null
   cfclient = null
@@ -64,9 +66,10 @@ def apply(config, stackName, stackNameUpper) {
     changeSetName = env["${stackNameUpper}_CHANGESET_NAME"]
   }
 
+  echo "Session duration: " + config.get('duration', 3600).toString()
   echo "Executing change set ${changeSetName}"
   executeChangeSet(clientBuilder, stackName, changeSetName)
-  def success = wait(clientBuilder, stackName, changeSetType)
+  def success = wait(clientBuilder, stackName, changeSetType, config)
 
   if (!success) {
     cfclient = clientBuilder.cloudformation()
@@ -87,12 +90,13 @@ def executeChangeSet(clientBuilder, stackName, changeSetName) {
   cfclient.executeChangeSet(new ExecuteChangeSetRequest()
     .withChangeSetName(changeSetName)
     .withStackName(stackName))
- cfclient = null 
+  cfclient = null 
 }
 
-def wait(clientBuilder, stackName, changeSetType) {
+def wait(clientBuilder, stackName, changeSetType, config) {
   def cfclient = clientBuilder.cloudformation()
   def waiter = null
+  def count = 0
   switch(changeSetType) {
     case 'CREATE':
       waiter = cfclient.waiters().stackCreateComplete()
@@ -103,7 +107,7 @@ def wait(clientBuilder, stackName, changeSetType) {
   }
 
   try {
-    Future future = waiter.runAsync(
+    def future = waiter.runAsync(
       new WaiterParameters<>(new DescribeStacksRequest().withStackName(stackName)),
       new NoOpWaiterHandler()
     )
@@ -111,6 +115,18 @@ def wait(clientBuilder, stackName, changeSetType) {
       try {
         echo "waiting for execute changeset to ${changeSetType.toLowerCase()} ..."
         Thread.sleep(10000)
+        count++
+        // Initialise new client and waiter if count exceeds set timeout value
+        if (count > 300) { //3000 seconds = 50 minutes, thread sleep is 10 secs so 300 iterations
+          cfclient = updateClient(clientBuilder, cfclient, config.region) 
+          waiter = updateWaiter(cfclient,changeSetType)
+          future = waiter.runAsync(
+             new WaiterParameters<>(new DescribeStacksRequest().withStackName(stackName)),
+             new NoOpWaiterHandler()
+          )
+          count = 0
+        }
+
       } catch(InterruptedException ex) {
           // suppress and continue
       }
@@ -126,10 +142,45 @@ def wait(clientBuilder, stackName, changeSetType) {
   def stacks = cfclient.describeStacks(request).getStacks()
   def finalStatus = stacks[0].getStackStatus()
   cfclient = null
-  if (!finalStatus.matches("UPDATE_COMPLETE|CREATE_COMPLETE")) {
+  if (!finalStatus.matches("UPDATE_COMPLETE|UPDATE_COMPLETE_CLEANUP_IN_PROGRESS|CREATE_COMPLETE")) {
     echo "execute changeset ${changeSetType.toLowerCase()} failed with status ${finalStatus}"
     return false
   }
   
   return true
+}
+
+def updateClient(clientBuilder, cfclient, region){
+  
+  echo "Updating Client"
+
+  def cb = new AmazonCloudFormationClientBuilder().standard()
+    .withClientConfiguration(clientBuilder.config())
+
+  if (region) {
+    cb.withRegion(region)
+  }
+
+  def creds =  clientBuilder.getNewCreds()
+
+  if(creds != null) {
+    cb.withCredentials(new AWSStaticCredentialsProvider(creds))
+  }
+
+  return cb.build()
+
+}
+
+def updateWaiter(cfclient, changeSetType){
+  echo "Updating Waiter"
+  switch(changeSetType) {
+    case 'CREATE':
+      def waiter = cfclient.waiters().stackCreateComplete()
+      echo "Created new waiter - ${waiter}"
+      return waiter
+    default:
+      def waiter = cfclient.waiters().stackUpdateComplete()
+      echo "Created new waiter - ${waiter}"
+      return waiter
+  }
 }

@@ -20,6 +20,7 @@ import com.amazonaws.services.rds.AmazonRDSClientBuilder
 import com.amazonaws.services.codeartifact.AWSCodeArtifactClientBuilder
 import com.amazonaws.services.sqs.AmazonSQSClientBuilder
 import com.amazonaws.services.cloudwatch.AmazonCloudWatchClientBuilder
+import com.amazonaws.services.autoscaling.AmazonAutoScalingClientBuilder
 
 class AwsClientBuilder implements Serializable {
   
@@ -183,7 +184,24 @@ class AwsClientBuilder implements Serializable {
     return cb.build()
   }
   
-  private def config() {
+  def asg() {
+    def cb = new AmazonAutoScalingClientBuilder().standard()
+      .withClientConfiguration(config())
+
+    if (region) {
+      cb.withRegion(region)
+    }
+
+    def creds = getCredentials()
+    if(creds != null) {
+      cb.withCredentials(new AWSStaticCredentialsProvider(creds))
+    }
+
+    return cb.build()
+  
+  }
+
+  def config() {
     def clientConfiguration = new ClientConfiguration()
       .withRetryPolicy(new RetryPolicy(
         new SDKDefaultRetryCondition(), 
@@ -227,4 +245,14 @@ class AwsClientBuilder implements Serializable {
     }
   }
 
+  def getNewCreds() {
+    def stsCreds = assumeRole()
+    def creds =  new BasicSessionCredentials(
+        stsCreds.getAccessKeyId(),
+        stsCreds.getSecretAccessKey(),
+        stsCreds.getSessionToken()
+      )
+
+    return creds
+  }
 }

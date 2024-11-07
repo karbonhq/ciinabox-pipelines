@@ -33,7 +33,8 @@
     debug: 'true|false', // (optional)
     winUpdate: true|false,  // (optional, whether to perform windows updates on AMI) 
     ec2LaunchV2: true|false, // (optional, set to true if windows ami is using EC2 Launch V2 package)
-    uninstallCinc: true|false // (optional, uninstall the cinc installation after the cinc provisioner)
+    uninstallCinc: true|false, // (optional, uninstall the cinc installation after the cinc provisioner)
+    credssp: true|false //(optional, defaults to false. Uses a CredSSP WinRM connection when connecting to windows instances)
   )
 ************************************/
 import com.base2.ciinabox.aws.Util
@@ -132,7 +133,7 @@ def call(body) {
     throw new GroovyRuntimeException("Unable to find AMI")
   }
 
-  if ((config.ebsVolumeSize && !config.ebsVolumeSize) || (!config.ebsVolumeSize && config.ebsVolumeSize)) {
+  if ((config.ebsVolumeSize && !config.ebsDeviceName) || (!config.ebsVolumeSize && config.ebsDeviceName)) {
     throw new GroovyRuntimeException("Supply both ebs Volume Size and DeviceName")
   }
 
@@ -167,11 +168,11 @@ def call(body) {
     ptb.addAmiTags(config.amiTags)
   }
 
-  ptb.addCommunicator(config.get('username', 'ec2-user'))
+  ptb.addCommunicator(config.get('username', 'ec2-user'), config.get('credssp', false))
   ptb.addInstall7zipProvisioner()
 
   if (config.winUpdate) {
-      ptb.addWindowsUpdate()
+    ptb.addWindowsUpdate()
   }
 
   if (config.runList) {
@@ -191,9 +192,9 @@ def call(body) {
   }
 
   if (config.ec2LaunchV2) {
-    ptb.addAmamzonEc2LaunchV2Provisioner()
+    ptb.addAmazonEc2LaunchV2Provisioner()
   } else {
-    ptb.addAmamzonConfigProvisioner()
+    ptb.addAmazonConfigProvisioner()
   }
 
   writeScript('packer/download_cookbooks.ps1')
@@ -201,6 +202,7 @@ def call(body) {
   writeScript('packer/ec2_launch_config.ps1')
   writeScript('packer/install_7zip.ps1')
   writeScript('packer/setup_winrm.ps1')
+  writeScript('packer/setup_winrm_credssp.ps1')
   writeScript('packer/uninstall_cinc.ps1')
 
   def packerTemplate = ptb.toJson()
@@ -223,6 +225,8 @@ ${packerTemplate}
 | Validating packer template                    |
 =================================================
   """)
+  sh "${packerPath} plugins install github.com/hashicorp/amazon"
+  sh "${packerPath} plugins install github.com/hashicorp/chef"
   sh "${packerPath} validate ${ptb.id}.json"
 
   println("""

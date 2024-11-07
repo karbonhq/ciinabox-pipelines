@@ -38,24 +38,30 @@ class PackerTemplateBuilder implements Serializable {
   }
 
   public void addWindowsUpdate(){
-      if (this.type.startsWith('windows')) {
-          this.provisioners.push([
-              type: 'windows-update'
-          ])
-      }
+    if (this.type.startsWith('windows')) {
+      this.provisioners.push([
+          type: 'windows-update'
+      ])
+    }
   }
 
-  public void addCommunicator(String username) {
+  public void addCommunicator(String username, Boolean credssp) {
     if (this.type.startsWith('windows')) {
       this.builder.communicator = 'winrm'
       this.builder.winrm_username = 'Administrator'
       this.builder.windows_password_timeout = '20m'
-      this.builder.user_data_file = 'setup_winrm.ps1'
+      if (credssp) {
+        this.builder.user_data_file = 'setup_winrm_credssp.ps1'
+      } else {
+        this.builder.user_data_file = 'setup_winrm.ps1'
+      }
+      
     } else {
       this.builder.communicator = 'ssh'
       this.builder.ssh_username = username
       this.builder.ssh_pty = true
       this.builder.ssh_timeout = '5m'
+      this.builder.temporary_key_pair_type = 'ed25519'
     }
   }
 
@@ -199,7 +205,7 @@ class PackerTemplateBuilder implements Serializable {
     }
   }
 
-  public void addAmamzonConfigProvisioner() {
+  public void addAmazonConfigProvisioner() {
     if (this.type.equals('windows')) {
       this.provisioners.push([
         type: 'powershell',
@@ -218,7 +224,7 @@ class PackerTemplateBuilder implements Serializable {
 
   }
 
-  public void addAmamzonEc2LaunchV2Provisioner() {
+  public void addAmazonEc2LaunchV2Provisioner() {
     if (this.type.equals('windows')) {
       this.provisioners.push([
         type: 'powershell',
